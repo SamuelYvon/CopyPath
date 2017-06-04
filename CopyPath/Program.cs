@@ -25,6 +25,7 @@ SOFTWARE.
 using Microsoft.Win32;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Security.Permissions;
 using System.Security.Principal;
@@ -37,15 +38,16 @@ namespace CopyPath
         private const string ReinstallCommand = "reinstall";
         private const string RemoveCommand = "remove";
 
-        private static readonly IReadOnlyList<string> Commands = new[] {ReinstallCommand};
-
+        private const string ShellSubkeyFile = @"*\shell";
+        private const string ShellSubKeyFolder = @"Directory\shell";
+        private const string OperationName = "Copy full path";
 
         public static bool IsAdmin()
         {
             using (WindowsIdentity identity = WindowsIdentity.GetCurrent())
             {
-                WindowsPrincipal principal = new WindowsPrincipal(identity);
-                return principal.IsInRole(WindowsBuiltInRole.Administrator);
+                return (new WindowsPrincipal(identity))
+                    .IsInRole(WindowsBuiltInRole.Administrator);
             }
         }
 
@@ -103,18 +105,23 @@ namespace CopyPath
             }
             else
             {
-                Install();
+                if (Install())
+                {
+                    MessageBox.Show("The copy path link has now been installed!", "Success!");
+                }
+                else
+                {
+                    ShowUnkownErrorMessage();
+                }
             }
         }
 
         /// <summary>
-        /// Install the registry settings to add the copy path
+        /// InstallReg the registry settings to add the copy path
         /// link
         /// </summary>
-        static bool Install()
+        private static bool Install()
         {
-            bool success = true;
-
             if (!IsAdmin())
             {
                 ShowAdminRightsRequiredMessage();
@@ -127,19 +134,18 @@ namespace CopyPath
             {
                 ShowUnkownErrorMessage();
             }
-            else if (success)
+            else
             {
                 try
                 {
-                    success = AddLinkToFiles(filePath);
+                    bool success = AddLinkToFiles(filePath);
 
                     if (success)
                     {
-                        //tbd folder
-                        return success;
+                        return AddLinkToFolders(filePath);
                     }
                 }
-                catch (System.Security.SecurityException ex)
+                catch (System.Security.SecurityException)
                 {
                     ShowAdminRightsRequiredMessage();
                 }
@@ -150,37 +156,45 @@ namespace CopyPath
 
 
         [PrincipalPermission(SecurityAction.Assert, Role = @"BUILTIN\Administrators")]
-        static bool Remove()
+        private static bool Remove()
         {
             try
             {
-                bool success = RemoveLinkToFiles();
-
-                if (success)
+                if (RemoveLinkToFiles())
                 {
-                    //tbd folder
-
-                    return success;
+                    return RemoveLinkToFolders();
                 }
             }
-            catch (System.Security.SecurityException ex)
+            catch (System.Security.SecurityException)
             {
                 ShowAdminRightsRequiredMessage();
             }
             return false;
         }
 
-        const string ShellSubkey = @"*\shell";
-        const string OperationName = "Copy full path";
-
         /// <summary>
         /// Remove the registry modifications for the individual files
         /// </summary>
         /// <returns></returns>
         [PrincipalPermission(SecurityAction.Assert, Role = @"BUILTIN\Administrators")]
-        static bool RemoveLinkToFiles()
+        private static bool RemoveLinkToFiles()
         {
-            using (RegistryKey shellKey = Registry.ClassesRoot.OpenSubKey(ShellSubkey, true))
+            return RemoveReg(ShellSubkeyFile);
+        }
+
+        /// <summary>
+        /// Remove the registry modifications for the individual folders
+        /// </summary>
+        /// <returns></returns>
+        [PrincipalPermission(SecurityAction.Assert, Role = @"BUILTIN\Administrators")]
+        private static bool RemoveLinkToFolders()
+        {
+            return RemoveReg(ShellSubKeyFolder);
+        }
+
+        private static bool RemoveReg(string regKey)
+        {
+            using (RegistryKey shellKey = Registry.ClassesRoot.OpenSubKey(regKey, true))
             {
                 if (null == shellKey)
                 {
@@ -197,7 +211,7 @@ namespace CopyPath
                     shellKey.DeleteSubKeyTree(OperationName, true);
                     return true;
                 }
-                
+
                 return true;
             }
         }
@@ -208,9 +222,25 @@ namespace CopyPath
         /// <param name="path"></param>
         /// <returns></returns>
         [PrincipalPermission(SecurityAction.Assert, Role = @"BUILTIN\Administrators")]
-        static bool AddLinkToFiles(string path)
+        private static bool AddLinkToFiles(string path)
         {
-            using (RegistryKey shellKey = Registry.ClassesRoot.OpenSubKey(ShellSubkey, true))
+            return InstallReg(path, ShellSubkeyFile);
+        }
+
+        /// <summary>
+        /// Add the registry modifications for the folders
+        /// </summary>
+        /// <param name="path"></param>
+        /// <returns></returns>
+        [PrincipalPermission(SecurityAction.Assert, Role = @"BUILTIN\Administrators")]
+        private static bool AddLinkToFolders(string path)
+        {
+            return InstallReg(path, ShellSubKeyFolder);
+        }
+
+        private static bool InstallReg(string path, string regKey)
+        {
+            using (RegistryKey shellKey = Registry.ClassesRoot.OpenSubKey(regKey, true))
             {
                 if (null == shellKey)
                 {
@@ -252,6 +282,7 @@ namespace CopyPath
             return false;
         }
 
+        [SuppressMessage("ReSharper", "UnusedParameter.Local")]
         private static void ShowUnkownErrorMessage(string msg = "")
         {
             MessageBox.Show("An unkown error occured", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
